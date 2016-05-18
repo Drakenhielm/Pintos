@@ -4,15 +4,18 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "threads/synch.h"
 
 static struct file *free_map_file;   /* Free map file. */
 static struct bitmap *free_map;      /* Free map, one bit per disk sector. */
 
+static struct lock lock_free_map;
 
 /* Initializes the free map. */
 void
 free_map_init (void) 
 {
+	lock_init(&lock_free_map);
   free_map = bitmap_create (disk_size (filesys_disk));
   if (free_map == NULL)
     PANIC ("bitmap creation failed--disk is too large");
@@ -28,7 +31,8 @@ bool
 free_map_allocate (size_t cnt, disk_sector_t *sectorp) 
 {
   disk_sector_t sector;
-  
+ 	
+	lock_acquire(&lock_free_map); 
   sector = bitmap_scan_and_flip (free_map, 0, cnt, false);
   if (sector != BITMAP_ERROR
       && free_map_file != NULL
@@ -40,6 +44,8 @@ free_map_allocate (size_t cnt, disk_sector_t *sectorp)
   
   if (sector != BITMAP_ERROR)
     *sectorp = sector;
+
+	lock_release(&lock_free_map); 
   return sector != BITMAP_ERROR;
 }
 
@@ -47,9 +53,11 @@ free_map_allocate (size_t cnt, disk_sector_t *sectorp)
 void
 free_map_release (disk_sector_t sector, size_t cnt)
 {
+	lock_acquire(&lock_free_map); 
   ASSERT (bitmap_all (free_map, sector, cnt));
   bitmap_set_multiple (free_map, sector, cnt, false);
   bitmap_write (free_map, free_map_file);
+	lock_release(&lock_free_map); 
 }
 
 /* Opens the free map file and reads it from disk. */

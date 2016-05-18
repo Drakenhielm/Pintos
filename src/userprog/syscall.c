@@ -41,21 +41,247 @@ const int argc[] = {
   0
 };
 
+static bool verify_fix_length(const void* start, const unsigned length)
+{
+	if (start == NULL || length < 0)
+		return false;
+
+	if (!is_user_vaddr(start + length))
+		return false;
+
+	char* cur_page = pg_round_down(start);
+	for(;;)
+	{
+		if(pagedir_get_page(thread_current()->pagedir, cur_page) == NULL)
+			return false;
+
+		cur_page += PGSIZE;
+
+		if(cur_page >= (char*)(start+length))
+			return true;
+	}
+
+}
+
+static bool verify_variable_length(const char* start)
+{
+	if (start == NULL)
+		return false;
+	
+	char* cur_page = pg_round_down(start);
+	char* cur_char = start;
+
+	for(;;)
+	{
+		if(pagedir_get_page(thread_current()->pagedir, cur_page) == NULL)
+			return false;
+
+		for(;cur_char < cur_page + PGSIZE; cur_char++)
+		{
+			if (!is_user_vaddr(cur_char))
+				return false;
+
+			if(*cur_char == '\0')
+				return true;
+
+			//cur_char++;
+		}
+		cur_page += PGSIZE;
+	}
+	
+}
+
+static int read(int fd, char* buf, unsigned length)
+{
+  if(fd == STDIN_FILENO)
+    {
+      unsigned count = 0;
+      char c;
+			while(count < length)
+			{
+				c = input_getc();
+				if (c == '\r')
+					c = '\n';
+			 
+				buf[count] = c;
+				printf("%c", c);
+				count = count + 1;
+			}
+      return count;
+    }
+  else if(fd == STDOUT_FILENO)
+    {
+      return -1;
+    }
+  else
+    {
+      struct file* file = flist_find(fd, thread_current());
+      if(file != NULL)
+	{
+	  return file_read(file, buf, length);
+	}
+      else
+	return -1;
+    }
+}
+
+static int write(int fd, const char* buf, unsigned length)
+{
+  if(fd == STDOUT_FILENO)
+    {
+      putbuf(buf, length);
+      return length;
+    }
+  else if(fd == STDIN_FILENO)
+    {
+      return -1;
+    }
+  else
+    {
+      struct file* file = flist_find(fd, thread_current());
+      if(file != NULL)
+	return file_write(file, buf, length);
+      else
+	return -1;
+    }
+}
+
+static int open (const char *file_name)
+{
+  struct file* file = filesys_open(file_name);
+
+  if(file != NULL)
+    return flist_insert(file, thread_current());
+  else
+    return -1;
+}
+
+static void seek(int fd, unsigned position)
+{
+  struct file* file = flist_find(fd, thread_current());
+  if(file != NULL)
+    if(position <= (unsigned)file_length(file))
+      file_seek(file, (off_t)position);
+}
+
+static unsigned tell(int fd)
+{
+  struct file* file = flist_find(fd, thread_current());
+  if(file != NULL)
+    return file_tell(file);
+  else
+    return -1;
+}
+
+static int filesize(int fd)
+{
+   struct file* file = flist_find(fd, thread_current());
+  if(file != NULL)
+    return file_length(file);
+  else
+    return -1;
+}
+
+static int create(const char* buf, int size)
+{
+	if(buf == NULL)
+	{
+		process_exit(-1);
+		return -1;
+	}	
+	else
+		return filesys_create(buf, size);
+}
+
 static void
 syscall_handler (struct intr_frame *f) 
 {
   int32_t* esp = (int32_t*)f->esp;
   
-  switch ( 0 /* retrive syscall number */ )
-  {
-    default:
+	if(!verify_fix_length(esp, 4))
+		process_exit(-1);
+	
+	int arg_count = argc[esp[0]];
+	if(!verify_fix_length(esp+1, 4*arg_count))
+		process_exit(-1);
+
+  switch (esp[0])
     {
-      printf ("Executed an unknown system call!\n");
-      
-      printf ("Stack top + 0: %d\n", esp[0]);
-      printf ("Stack top + 1: %d\n", esp[1]);
-      
-      thread_exit ();
-    }
+    case SYS_HALT:
+      power_off();
+      break;
+    case SYS_EXIT:
+				process_exit(esp[1]);
+      break;
+    case SYS_READ:
+			if(!verify_fix_length((char*)esp[2], esp[3]))
+				process_exit(-1);
+      f->eax = read(esp[1], (char*)esp[2], esp[3]);
+      break;
+    case SYS_WRITE:
+			if(!verify_fix_length((char*)esp[2], esp[3]))
+				process_exit(-1);
+      f->eax = write(esp[1], (char*)esp[2], esp[3]);
+      break;
+    case SYS_OPEN:
+			if(!verify_variable_length((char*)esp[1]))
+			{	
+				process_exit(-1);
+				f->eax = -1;
+			}
+			else
+      f->eax = open((char*)esp[1]);
+      break;
+    case SYS_CLOSE:
+      filesys_close(flist_remove(esp[1], thread_current()));
+      break;
+    case SYS_REMOVE:
+			if(!verify_variable_length((char*)esp[1]))
+				process_exit(-1);
+      f->eax = filesys_remove((char*)esp[1]);
+      break;
+    case SYS_CREATE:
+			if(!verify_variable_length((char*)esp[1]))	
+				process_exit(-1);
+			f->eax = create((const char*)esp[1], esp[2]);
+      break;
+    case SYS_SEEK:
+      seek(esp[1], esp[2]);
+      break;
+    case SYS_TELL:
+      f->eax = tell(esp[1]);
+      break;
+    case SYS_FILESIZE:
+      f->eax = filesize(esp[1]);
+      break;
+    case SYS_EXEC:
+			if(!verify_variable_length((char*)esp[1]))
+			{	
+				f->eax = -1;
+				process_exit(-1);
+			}
+			else
+      	f->eax = process_execute((const char*)esp[1]);
+      break;
+    case SYS_SLEEP:
+      f->eax = timer_msleep(esp[1]);
+      break;
+		case SYS_PLIST:
+      process_print_list();
+      break;
+		case SYS_WAIT:
+      f->eax = process_wait(esp[1]);
+      break;
+    default:
+      {
+				printf ("Executed an unknown system call!\n");
+						
+				printf ("Stack top + 0: %d\n", esp[0]);
+				printf ("Stack top + 1: %d\n", esp[1]);
+						
+				process_exit(-1);
+    	}
   }
 }
+
+

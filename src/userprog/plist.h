@@ -1,6 +1,9 @@
 #ifndef _PLIST_H_
 #define _PLIST_H_
 
+#include "threads/synch.h"
+
+#define PLIST_SIZE 61
 
 /* Place functions to handle a running process here (process list).
    
@@ -28,6 +31,25 @@
      clean, readable format.
      
  */
+
+struct process_info
+{
+  int free;
+  int pid;
+  int parent;
+  int parent_alive;
+  struct semaphore sema;
+  int result;
+  int alive;
+  int waiting;
+};
+
+void plist_init();
+void plist_print();
+int plist_insert(int pid, int parent);
+void plist_set_result(int pid, int result);
+int plist_get_result(int pid);
+int plist_kill(int pid);
 
 
 #endif

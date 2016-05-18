@@ -24,6 +24,24 @@
 /* HACK defines code you must remove and implement in a proper way */
 #define HACK
 
+struct main_args
+{
+  /* Hint: When try to interpret C-declarations, read from right to
+   * left! It is often easier to get the correct interpretation,
+   * altough it does not always work. */
+
+  /* Variable "ret" that stores address (*ret) to a function taking no
+   * parameters (void) and returning nothing. */
+  void (*ret)(void);
+
+  /* Just a normal integer. */
+  int argc;
+  
+  /* Variable "argv" that stores address to an address storing char.
+   * That is: argv is a pointer to char*
+   */
+  char** argv;
+};
 
 /* This function is called at boot time (threads/init.c) to initialize
  * the process subsystem. */
@@ -36,20 +54,27 @@ void process_init(void)
  * instead. Note however that all cleanup after a process must be done
  * in process_cleanup, and that process_cleanup are already called
  * from thread_exit - do not call cleanup twice! */
-void process_exit(int status UNUSED)
+void process_exit(int status)
 {
+	plist_set_result(thread_current()->tid, status);
+ 	thread_exit();
 }
 
 /* Print a list of all running processes. The list shall include all
- * relevant debug information in a clean, readable format. */
+ * relevant debug information in a 
+, readable format. */
 void process_print_list()
 {
+	plist_print();
 }
 
 
 struct parameters_to_start_process
 {
   char* command_line;
+  struct semaphore sema;
+  bool success;
+	int parent_tid;
 };
 
 static void
@@ -72,6 +97,9 @@ process_execute (const char *command_line)
   /* LOCAL variable will cease existence when function return! */
   struct parameters_to_start_process arguments;
 
+  arguments.success = false;
+	arguments.parent_tid = thread_current()->tid;
+
   debug("%s#%d: process_execute(\"%s\") ENTERED\n",
         thread_current()->name,
         thread_current()->tid,
@@ -84,16 +112,23 @@ process_execute (const char *command_line)
 
   strlcpy_first_word (debug_name, command_line, 64);
   
+  sema_init(&(arguments.sema), 0);
+  
   /* SCHEDULES function `start_process' to run (LATER) */
   thread_id = thread_create (debug_name, PRI_DEFAULT,
                              (thread_func*)start_process, &arguments);
+  
+  if(thread_id != TID_ERROR)
+    sema_down(&(arguments.sema));
 
   process_id = thread_id;
 
+  if(!arguments.success)
+    process_id = -1;
+
   /* AVOID bad stuff by turning off. YOU will fix this! */
-  power_off();
-  
-  
+  //power_off();
+
   /* WHICH thread may still be using this right now? */
   free(arguments.command_line);
 
@@ -104,6 +139,118 @@ process_execute (const char *command_line)
 
   /* MUST be -1 if `load' in `start_process' return false */
   return process_id;
+}
+
+/* Return true if 'c' is fount in the c-string 'd'
+ * NOTE: 'd' must be a '\0'-terminated c-string
+ */
+bool exists_in(char c, const char* d)
+{
+  int i = 0;
+  while (d[i] != '\0' && d[i] != c)
+    ++i;
+  return (d[i] == c);
+}
+
+/* Return the number of words in 'buf'. A word is defined as a
+ * sequence of characters not containing any of the characters in
+ * 'delimeters'.
+ * NOTE: arguments must be '\0'-terminated c-strings
+ */
+int count_args(const char* buf, const char* delimeters)
+{
+  int i = 0;
+  bool prev_was_delim;
+  bool cur_is_delim = true;
+  int argc = 0;
+
+  while (buf[i] != '\0')
+  {
+    prev_was_delim = cur_is_delim;
+    cur_is_delim = exists_in(buf[i], delimeters);
+    argc += (prev_was_delim && !cur_is_delim);
+    ++i;
+  }
+  return argc;
+}
+
+void* setup_main_stack(const char* command_line, void* stack_top)
+{
+  /* Variable "esp" stores an address, and at the memory loaction
+   * pointed out by that address a "struct main_args" is found.
+   * That is: "esp" is a pointer to "struct main_args" */
+  struct main_args* esp;
+  int argc;
+  int total_size;
+  int line_size;
+  /* "cmd_line_on_stack" and "ptr_save" are variables that each store
+   * one address, and at that address (the first) char (of a possible
+   * sequence) can be found. */
+  char* cmd_line_on_stack;
+  char* ptr_save;
+  int i = 0;
+  
+  /* calculate the bytes needed to store the command_line */
+  line_size = strlen(command_line)+1;
+
+  /* round up to make it even divisible by 4 */
+  if(line_size % 4 != 0)
+    line_size = line_size + (4-(line_size % 4));
+
+  /* calculate how many words the command_line contain */
+  argc = count_args(command_line, " ");
+
+  /* calculate the size needed on our simulated stack */
+  total_size = line_size + 16 + argc*4;
+  
+
+  /* calculate where the final stack top will be located */
+  esp = (struct main_args*)(stack_top-total_size);
+  
+  /* setup return address and argument count */
+  esp->ret = NULL;
+  esp->argc = argc;
+  /* calculate where in the memory the argv array starts */
+  esp->argv = (char**)(esp+1);
+  
+  /* calculate where in the memory the words is stored */
+  cmd_line_on_stack = (char*)(esp->argv+argc+1);
+  
+  /* copy the command_line to where it should be in the stack */
+
+  int arg_count = 0;
+  int word_found = 0;
+  for(i = 0; i < strlen(command_line); i++)
+    {
+      if(command_line[i] == ' ' && word_found != 0)
+	{
+	  cmd_line_on_stack[i] = '\0';
+	  word_found = 0;
+	}
+      else
+	{
+	  cmd_line_on_stack[i] = command_line[i];
+	  if(command_line[i] != ' ' && word_found == 0)
+	    {
+	      word_found = 1;
+	      esp->argv[arg_count++] = (char*)cmd_line_on_stack + i;
+	    }
+	}
+    }
+  
+  /*
+  int j = 0;
+  for(j = 1; j <= (line_size-strlen(command_line)); j++)
+  {
+    cmd_line_on_stack[i+j] = '\0';
+  }
+  */
+  
+  cmd_line_on_stack[i] = '\0';
+  esp->argv[arg_count] = NULL;
+  /* build argv array and insert null-characters after each word */
+
+  return esp; /* the new stack top */
 }
 
 /* A thread function that loads a user process and starts it
@@ -148,14 +295,14 @@ start_process (struct parameters_to_start_process* parameters)
        C-function expects the stack to contain, in order, the return
        address, the first argument, the second argument etc. */
     
-    HACK if_.esp -= 12; /* Unacceptable solution. */
+    if_.esp = setup_main_stack(parameters->command_line, if_.esp);
 
     /* The stack and stack pointer should be setup correct just before
        the process start, so this is the place to dump stack content
        for debug purposes. Disable the dump when it works. */
     
-//    dump_stack ( PHYS_BASE + 15, PHYS_BASE - if_.esp + 16 );
-
+	    //dump_stack ( PHYS_BASE + 15, PHYS_BASE - if_.esp + 16 );
+			success = plist_insert(thread_current()->tid, parameters->parent_tid);
   }
 
   debug("%s#%d: start_process(\"%s\") DONE\n",
@@ -163,7 +310,9 @@ start_process (struct parameters_to_start_process* parameters)
         thread_current()->tid,
         parameters->command_line);
   
-  
+	parameters->success = success;
+  sema_up(&(parameters->sema));  
+
   /* If load fail, quit. Load may fail for several reasons.
      Some simple examples:
      - File doeas not exist
@@ -202,6 +351,9 @@ process_wait (int child_id)
   debug("%s#%d: process_wait(%d) ENTERED\n",
         cur->name, cur->tid, child_id);
   /* Yes! You need to do something good here ! */
+	
+	status = plist_wait(cur->tid, child_id);
+
   debug("%s#%d: process_wait(%d) RETURNS %d\n",
         cur->name, cur->tid, child_id, status);
   
@@ -236,7 +388,11 @@ process_cleanup (void)
    * that may sometimes poweroff as soon as process_wait() returns,
    * possibly before the prontf is completed.)
    */
+	status = plist_get_result(cur->tid);
+	
   printf("%s: exit(%d)\n", thread_name(), status);
+
+	plist_kill(thread_current()->tid);
   
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

@@ -9,6 +9,8 @@
 int
 main (void)
 {
+  exit(2);
+  exit(10);
   halt ();
   /* not reached */
 }

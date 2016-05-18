@@ -72,18 +72,20 @@ int main(int argc, char* argv[])
   for (j = 0; j < repeat; ++j)
   {
     /* you may have to increase the multiple to more than 5 */
-    int ticks = 10 * 1000 * 1000 * j / repeat;
+    int ticks = 300 * 1000 * 1000 * j / repeat;
     
     snprintf(cmd, BUF_SIZE, "generic_parent %s %i %i", "dummy", j*simul, simul);
     
     exec(cmd);
     
-//    plist();
+		plist();
 
     /* since we do not have the wait systemcall yet */
     printf("Now entering busy-loop to let some processes finish\n");
     while (ticks--)
       ;
   }
+	printf("!!!!!!!!!!!!!!!!!!!!!!!!!!FINAL PLIST!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+	plist();
   return 0;
 }

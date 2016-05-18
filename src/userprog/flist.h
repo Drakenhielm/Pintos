@@ -1,6 +1,9 @@
 #ifndef _MAP_H_
 #define _MAP_H_
 
+#include <list.h>
+#include "filesys/file.h"
+
 /* Place functions to handle a process open files here (file list).
    
    flist.h : Your function declarations and documentation.
@@ -31,5 +34,26 @@
    (probably when removed from the list(s)).
  */
 
+struct thread;
+
+struct association
+{
+  int key;
+  void* value;
+  struct list_elem elem;
+};
+
+struct map
+{
+  struct list content;
+  int next_key;
+};
+
+void flist_init(struct map*);
+int flist_insert(struct file*, struct thread*);
+void* flist_find(int, struct thread*);
+void* flist_remove(int, struct thread*);
+void flist_for_each(struct map*, void (*exec) (int, struct file*, int), int);
+void flist_remove_if(struct map*, bool (*cond) (int, struct file*, int), int);
 
 #endif
